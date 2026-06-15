@@ -36,6 +36,12 @@ struct KDE_stat
 	vector<long long> profile_nodes_per_query;
 	vector<long long> profile_leaf_nodes_per_query;
 	vector<long long> profile_exact_points_per_query;
+	vector<long long> profile_expanded_internal_nodes_per_query;
+	vector<long long> profile_accepted_far_nodes_per_query;
+	vector<long long> profile_visited_nodes_per_query;
+	vector<long long> profile_pq_max_size_per_query;
+	vector<int> profile_certificate_pass_per_query;
+	vector<double> profile_final_relative_gap_per_query;
 #endif
 };
 

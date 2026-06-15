@@ -34,6 +34,31 @@ static double percentileLongLong(vector<long long> values,double percentile)
 	return (double)values[index];
 }
 
+static const char* stage0Env(const char* name,const char* fallback)
+{
+	const char* value=getenv(name);
+	if(value==NULL || value[0]=='\0')
+		return fallback;
+	return value;
+}
+
+static const char* stage0TreeType(int method)
+{
+	if(method>=1 && method<=3)
+		return "kd_tree";
+	if(method==11 || method==12)
+		return "ball_tree";
+	return "other";
+}
+
+static double finalRelativeGap(double L,double U)
+{
+	double denom=U+L;
+	if(fabs(denom)<epsilon)
+		return 0.0;
+	return (U-L)/denom;
+}
+
 static void resetProfile(KDE_stat& stat)
 {
 	stat.profile_queries=0;
@@ -52,6 +77,12 @@ static void resetProfile(KDE_stat& stat)
 	stat.profile_nodes_per_query.clear();
 	stat.profile_leaf_nodes_per_query.clear();
 	stat.profile_exact_points_per_query.clear();
+	stat.profile_expanded_internal_nodes_per_query.clear();
+	stat.profile_accepted_far_nodes_per_query.clear();
+	stat.profile_visited_nodes_per_query.clear();
+	stat.profile_pq_max_size_per_query.clear();
+	stat.profile_certificate_pass_per_query.clear();
+	stat.profile_final_relative_gap_per_query.clear();
 }
 
 static void printProfile(int method,KDE_stat& stat)
@@ -94,6 +125,50 @@ static void printProfile(int method,KDE_stat& stat)
 		<<", time_bound_sec="<<stat.profile_time_bound_sec
 		<<", time_leaf_eval_sec="<<stat.profile_time_leaf_eval_sec<<endl;
 }
+
+static void writeStage0PerQueryCsv(int method,int leafCapacity,int qNum,KDE_stat& stat)
+{
+	const char* outputDir=getenv("KARL_STAGE0_DIAG_DIR");
+	if(outputDir==NULL || outputDir[0]=='\0')
+		return;
+
+	const string dataset=stage0Env("KARL_STAGE0_DATASET","unknown");
+	const string impl=stage0Env("KARL_STAGE0_IMPL","cpu_karl");
+	const string bandwidth=stage0Env("KARL_STAGE0_BANDWIDTH","unknown");
+	const string treeType=stage0TreeType(method);
+	string outputPath=string(outputDir)+"/"+dataset+".csv";
+	ofstream out(outputPath.c_str());
+	if(!out)
+	{
+		cerr<<"[STAGE0] Failed to open per-query CSV: "<<outputPath<<endl;
+		return;
+	}
+
+	out<<"dataset,impl,tree_type,method,leaf_capacity,bandwidth,query_count,query_id,"
+		<<"visited_nodes,expanded_internal_nodes,accepted_far_nodes,visited_leaf_nodes,"
+		<<"exact_point_evals,gap_formula,epsilon,certificate_pass,final_relative_gap,"
+		<<"pq_max_size,pq_overflow_count\n";
+
+	const string gapFormula="relative=(U-L)/(U+L);pass=U-L<=eps*(U+L);fallback=fabs(L)<1e-9&&fabs(U)<1e-9";
+	const int rows=(int)stat.profile_visited_nodes_per_query.size();
+	for(int q=0;q<rows;q++)
+	{
+		out<<dataset<<","<<impl<<","<<treeType<<","<<method<<","<<leafCapacity<<","
+			<<bandwidth<<","<<qNum<<","<<q<<","
+			<<stat.profile_visited_nodes_per_query[q]<<","
+			<<stat.profile_expanded_internal_nodes_per_query[q]<<","
+			<<stat.profile_accepted_far_nodes_per_query[q]<<","
+			<<stat.profile_leaf_nodes_per_query[q]<<","
+			<<stat.profile_exact_points_per_query[q]<<","
+			<<"\""<<gapFormula<<"\","
+			<<stat.rel_error<<","
+			<<stat.profile_certificate_pass_per_query[q]<<","
+			<<setprecision(17)<<stat.profile_final_relative_gap_per_query[q]<<","
+			<<stat.profile_pq_max_size_per_query[q]<<",0\n";
+	}
+
+	cout<<"[STAGE0] Wrote CPU per-query counters: "<<outputPath<<endl;
+}
 #endif
 
 void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
@@ -109,13 +184,17 @@ void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
 	long long query_nodes_processed=0;
 	long long query_leaf_nodes=0;
 	long long query_exact_points=0;
+	long long query_expanded_internal_nodes=0;
+	long long query_accepted_far_nodes=0;
+	long long query_pq_max_size=0;
 	long long query_bound_calls=0;
 	long long query_validate_checks=0;
 	long long query_heap_pushes=0;
 	long long query_heap_pops=0;
 
-	auto recordQueryProfile=[&](bool validateSuccess,bool exactFinish)
+	auto recordQueryProfile=[&](bool validateSuccess,bool exactFinish,double final_gap)
 	{
+		long long query_visited_nodes=query_expanded_internal_nodes+query_accepted_far_nodes+query_leaf_nodes;
 		stat.profile_queries++;
 		stat.profile_nodes_processed+=query_nodes_processed;
 		stat.profile_leaf_nodes+=query_leaf_nodes;
@@ -127,6 +206,12 @@ void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
 		stat.profile_nodes_per_query.push_back(query_nodes_processed);
 		stat.profile_leaf_nodes_per_query.push_back(query_leaf_nodes);
 		stat.profile_exact_points_per_query.push_back(query_exact_points);
+		stat.profile_expanded_internal_nodes_per_query.push_back(query_expanded_internal_nodes);
+		stat.profile_accepted_far_nodes_per_query.push_back(query_accepted_far_nodes);
+		stat.profile_visited_nodes_per_query.push_back(query_visited_nodes);
+		stat.profile_pq_max_size_per_query.push_back(query_pq_max_size);
+		stat.profile_certificate_pass_per_query.push_back((validateSuccess || exactFinish) ? 1 : 0);
+		stat.profile_final_relative_gap_per_query.push_back(final_gap);
 		if(validateSuccess)
 			stat.profile_validate_success_queries++;
 		if(exactFinish)
@@ -155,6 +240,7 @@ void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
 	pq.push(pq_entry);
 #ifdef KARL_PROFILE
 	query_heap_pushes++;
+	query_pq_max_size=max(query_pq_max_size,(long long)pq.size());
 #endif
 
 	while(pq.size()!=0)
@@ -173,7 +259,8 @@ void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
 		{
 			stat.resultValueVector.push_back(val_R);
 #ifdef KARL_PROFILE
-			recordQueryProfile(true,false);
+			query_accepted_far_nodes=(long long)pq.size();
+			recordQueryProfile(true,false,finalRelativeGap(L,U));
 #endif
 			clearHeap(pq);
 			return;
@@ -220,6 +307,9 @@ void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
 		}
 
 		//Non-Leaf Node
+#ifdef KARL_PROFILE
+		query_expanded_internal_nodes++;
+#endif
 		for(int c=0;c<(int)curNode->childVector.size();c++)
 		{
 #ifdef KARL_PROFILE
@@ -241,6 +331,7 @@ void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
 			pq.push(pq_entry);
 #ifdef KARL_PROFILE
 			query_heap_pushes++;
+			query_pq_max_size=max(query_pq_max_size,(long long)pq.size());
 #endif
 		}
 	}
@@ -248,7 +339,7 @@ void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat)
 	//Case (L=exact=U):
 	stat.resultValueVector.push_back(L);
 #ifdef KARL_PROFILE
-	recordQueryProfile(false,true);
+	recordQueryProfile(false,true,0.0);
 #endif
 	clearHeap(pq);
 }
@@ -402,6 +493,7 @@ void KAQ_Algorithm(double**queryMatrix,double**dataMatrix,int qNum,int dim,int l
 	cout<<"Method "<<method<<": "<<((double)qNum/online_Time)<<" Queries/sec"<<endl;
 #ifdef KARL_PROFILE
 	printProfile(method,stat);
+	writeStage0PerQueryCsv(method,leafCapacity,qNum,stat);
 #endif
 	//cout<<"pruning ratio: "<<((double)stat.pruneCount)/((double)qNum)<<endl;
 
