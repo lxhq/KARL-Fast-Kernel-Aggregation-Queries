@@ -1,0 +1,13 @@
+Publish_codes/**/build/
+Publish_codes/**/test_Result/
+Publish_codes/**/Datasets/
+*.o
+*.obj
+*.exe
+*.ilk
+*.pdb
+*.idb
+*.dep
+*.manifest
+Publish_codes/**/main
+Publish_codes/**/main_KDC
