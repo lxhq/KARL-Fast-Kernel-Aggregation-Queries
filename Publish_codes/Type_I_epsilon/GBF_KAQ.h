@@ -30,6 +30,7 @@ typedef priority_queue<pqNode,vector<pqNode>,comparePriority> PQ;
 double computeSqNorm(double*q,int dim);
 
 void GBF_iter(double*q,Tree& tree,int dim,KDE_stat& stat);
+void GBF_iter_residual_budget(double*q,Tree& tree,int dim,KDE_stat& stat,double budget_fraction);
 
 void KAQ_Algorithm(double**queryMatrix,double**dataMatrix,int qNum,int dim,int leafCapacity,int internalCapacity,int method,KDE_stat& stat,char*bulkLoad_TreeName);
 

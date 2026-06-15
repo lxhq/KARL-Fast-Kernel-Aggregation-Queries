@@ -197,6 +197,289 @@ void kdLinearAugNode::update_linearAugInfo(kdLinearAugNode*node,Tree*t)
 	update_linearAugInfo((kdLinearAugNode*)node->childVector[1],t);
 }
 
+static double expFromLogValue(long double log_value)
+{
+	if(log_value==numeric_limits<long double>::infinity())
+		return inf;
+	if(log_value==(-numeric_limits<long double>::infinity()))
+		return 0.0;
+	if(!isfinite((double)log_value))
+		return inf;
+	if(log_value<-745.0L)
+		return 0.0;
+	if(log_value>700.0L)
+		return inf;
+
+	return (double)expl(log_value);
+}
+
+static double logSumExp2(long double a,long double b)
+{
+	if(a==(-numeric_limits<long double>::infinity()))
+		return expFromLogValue(b);
+	if(b==(-numeric_limits<long double>::infinity()))
+		return expFromLogValue(a);
+
+	long double m=max(a,b);
+	return expFromLogValue(m+logl(expl(a-m)+expl(b-m)));
+}
+
+static bool computeAnchorEnvelope(kdAnchorAugNode*node,double*q,int dim,double& anchor_L,double& anchor_U,double*delta_u_out=NULL)
+{
+	if(node->anchor_W<=0 || !isfinite(node->anchor_W))
+		return false;
+
+	long double z2=0.0L;
+	long double weighted_u_sum=0.0L;
+	long double dot_min=0.0L;
+	long double dot_max=0.0L;
+
+	for(int d=0;d<dim;d++)
+	{
+		long double z=(long double)q[d]-(long double)node->anchor[d];
+		long double y_lo=(long double)node->boundary[d][0]-(long double)node->anchor[d];
+		long double y_hi=(long double)node->boundary[d][1]-(long double)node->anchor[d];
+		long double prod_lo=z*y_lo;
+		long double prod_hi=z*y_hi;
+
+		z2+=z*z;
+		weighted_u_sum+=2.0L*z*(long double)node->anchor_A[d];
+		dot_min+=min(prod_lo,prod_hi);
+		dot_max+=max(prod_lo,prod_hi);
+	}
+
+	long double W=(long double)node->anchor_W;
+	long double logW=logl(W);
+	long double mu=weighted_u_sum/W;
+	long double u_min=2.0L*dot_min;
+	long double u_max=2.0L*dot_max;
+	long double z_norm=sqrtl(z2);
+	long double ball_u_min=-2.0L*z_norm*(long double)node->anchor_radius;
+	long double ball_u_max=2.0L*z_norm*(long double)node->anchor_radius;
+
+	u_min=max(u_min,ball_u_min);
+	u_max=min(u_max,ball_u_max);
+
+	if(u_min>u_max)
+		return false;
+
+	if(delta_u_out!=NULL)
+		*delta_u_out=(double)(u_max-u_min);
+
+	if(mu<u_min)
+		mu=u_min;
+	if(mu>u_max)
+		mu=u_max;
+
+	anchor_L=expFromLogValue(logW-z2+mu);
+
+	if(u_max-u_min<epsilon)
+	{
+		anchor_U=expFromLogValue(logW-z2+u_min);
+			return isfinite(anchor_L) && isfinite(anchor_U);
+	}
+
+	long double denom=u_max-u_min;
+	long double lambda_min=(u_max-mu)/denom;
+	long double lambda_max=(mu-u_min)/denom;
+
+	if(lambda_min<0.0L)
+		lambda_min=0.0L;
+	if(lambda_max<0.0L)
+		lambda_max=0.0L;
+
+	long double neg_inf=-numeric_limits<long double>::infinity();
+	long double term_min=lambda_min>0.0L ? logl(lambda_min)+logW-z2+u_min : neg_inf;
+	long double term_max=lambda_max>0.0L ? logl(lambda_max)+logW-z2+u_max : neg_inf;
+
+	anchor_U=logSumExp2(term_min,term_max);
+
+	if(anchor_U<anchor_L)
+		anchor_U=anchor_L;
+
+	return isfinite(anchor_L) && anchor_L>=0.0 && anchor_L<=node->sumE && anchor_U>=anchor_L;
+}
+
+static bool computeAdaptiveAnchorCandidate(kdAnchorAugNode*node,double*q,int dim,double& anchor_L,double& anchor_U)
+{
+	const double threshold=1.0;
+	double delta_u;
+
+	if(computeAnchorEnvelope(node,q,dim,anchor_L,anchor_U,&delta_u)==false)
+		return false;
+
+	double lb=ell_MBR(q,node->boundary,dim);
+	double ub=u_MBR(q,node->boundary,dim);
+	double delta_x=ub*ub-lb*lb;
+
+	if(delta_x<epsilon)
+		return false;
+
+	return delta_u<threshold*delta_x;
+}
+
+double kdAnchorAugNode::LB(double*q,int dim,KDE_stat& stat)
+{
+	double base_L=kdLinearAugNode::LB(q,dim,stat);
+	double anchor_L;
+	double anchor_U;
+
+	if(computeAnchorEnvelope(this,q,dim,anchor_L,anchor_U)==false)
+		return base_L;
+
+	return max(base_L,anchor_L);
+}
+
+double kdAnchorAugNode::UB(double*q,int dim,KDE_stat& stat)
+{
+	double base_U=kdLinearAugNode::UB(q,dim,stat);
+	double anchor_L;
+	double anchor_U;
+
+	if(computeAnchorEnvelope(this,q,dim,anchor_L,anchor_U)==false)
+		return base_U;
+
+	return min(base_U,anchor_U);
+}
+
+kdAnchorAugNode*kdAnchorAugNode::createNode()
+{
+	return new kdAnchorAugNode();
+}
+
+double kdAnchorOnlyAugNode::LB(double*q,int dim,KDE_stat& stat)
+{
+	double anchor_L;
+	double anchor_U;
+
+	if(computeAnchorEnvelope(this,q,dim,anchor_L,anchor_U)==false)
+		return kdLinearAugNode::LB(q,dim,stat);
+
+	return anchor_L;
+}
+
+double kdAnchorOnlyAugNode::UB(double*q,int dim,KDE_stat& stat)
+{
+	double anchor_L;
+	double anchor_U;
+
+	if(computeAnchorEnvelope(this,q,dim,anchor_L,anchor_U)==false)
+		return kdLinearAugNode::UB(q,dim,stat);
+
+	return anchor_U;
+}
+
+kdAnchorOnlyAugNode*kdAnchorOnlyAugNode::createNode()
+{
+	return new kdAnchorOnlyAugNode();
+}
+
+double kdAdaptiveCombinedAnchorNode::LB(double*q,int dim,KDE_stat& stat)
+{
+	double base_L=kdLinearAugNode::LB(q,dim,stat);
+	cache_q=q;
+	cache_use_anchor=computeAdaptiveAnchorCandidate(this,q,dim,cache_anchor_L,cache_anchor_U);
+
+	if(cache_use_anchor==false)
+		return base_L;
+
+	return max(base_L,cache_anchor_L);
+}
+
+double kdAdaptiveCombinedAnchorNode::UB(double*q,int dim,KDE_stat& stat)
+{
+	double base_U=kdLinearAugNode::UB(q,dim,stat);
+
+	if(cache_q==q && cache_use_anchor==true)
+		return min(base_U,cache_anchor_U);
+
+	return base_U;
+}
+
+kdAdaptiveCombinedAnchorNode*kdAdaptiveCombinedAnchorNode::createNode()
+{
+	return new kdAdaptiveCombinedAnchorNode();
+}
+
+double kdAdaptiveSelectAnchorNode::LB(double*q,int dim,KDE_stat& stat)
+{
+	cache_q=q;
+	cache_use_anchor=computeAdaptiveAnchorCandidate(this,q,dim,cache_anchor_L,cache_anchor_U);
+
+	if(cache_use_anchor==true)
+		return cache_anchor_L;
+
+	return kdLinearAugNode::LB(q,dim,stat);
+}
+
+double kdAdaptiveSelectAnchorNode::UB(double*q,int dim,KDE_stat& stat)
+{
+	if(cache_q==q && cache_use_anchor==true)
+		return cache_anchor_U;
+
+	return kdLinearAugNode::UB(q,dim,stat);
+}
+
+kdAdaptiveSelectAnchorNode*kdAdaptiveSelectAnchorNode::createNode()
+{
+	return new kdAdaptiveSelectAnchorNode();
+}
+
+void kdAnchorAugNode::update_Aug(Node*node,Tree*t)
+{
+	this->updateAugInfo((kdLinearAugNode*)node,t);
+	this->update_linearAugInfo((kdLinearAugNode*)node,t);
+	this->update_anchorAugInfo((kdAnchorAugNode*)node,t);
+}
+
+void kdAnchorAugNode::update_anchorAugInfo(kdAnchorAugNode*node,Tree*t)
+{
+	int id;
+	double y;
+	double alpha;
+	double y_norm_square;
+
+	node->anchor=new double[t->dim];
+	node->anchor_A=new double[t->dim];
+	node->anchor_W=0;
+	node->anchor_radius=0;
+
+	for(int d=0;d<t->dim;d++)
+	{
+		node->anchor[d]=node->center[d];
+		node->anchor_A[d]=0;
+	}
+
+	for(int i=0;i<(int)node->idList.size();i++)
+	{
+		id=node->idList[i];
+		y_norm_square=0;
+		for(int d=0;d<t->dim;d++)
+		{
+			y=t->dataMatrix[id][d]-node->anchor[d];
+			y_norm_square+=y*y;
+		}
+		if(y_norm_square>node->anchor_radius)
+			node->anchor_radius=y_norm_square;
+
+		alpha=exp(-y_norm_square);
+		node->anchor_W+=alpha;
+
+		for(int d=0;d<t->dim;d++)
+		{
+			y=t->dataMatrix[id][d]-node->anchor[d];
+			node->anchor_A[d]+=alpha*y;
+		}
+	}
+	node->anchor_radius=sqrt(node->anchor_radius);
+
+	if((int)node->idList.size()<=t->leafCapacity)
+		return;
+
+	update_anchorAugInfo((kdAnchorAugNode*)node->childVector[0],t);
+	update_anchorAugInfo((kdAnchorAugNode*)node->childVector[1],t);
+}
+
 //kd-tree
 kdTree::kdTree(int dim,double**dataMatrix,int leafCapacity,KDE_stat& stat)
 {

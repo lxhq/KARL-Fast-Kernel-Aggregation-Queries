@@ -18,6 +18,26 @@ struct KDE_stat
 
 	//Output result value vectors
 	vector<double> resultValueVector;
+
+	// CPU traversal profile counters for tree-based methods.
+	long long profile_queries;
+	long long profile_nodes_processed;
+	long long profile_leaf_nodes;
+	long long profile_exact_points;
+	long long profile_bound_calls;
+	long long profile_validate_checks;
+	long long profile_heap_pushes;
+	long long profile_heap_pops;
+	long long profile_validate_success_queries;
+	long long profile_exact_finish_queries;
+	double profile_time_validate_sec;
+	double profile_time_bound_sec;
+	double profile_time_leaf_eval_sec;
+	long long profile_residual_discards;
+	double profile_residual_budget;
+	vector<long long> profile_nodes_per_query;
+	vector<long long> profile_leaf_nodes_per_query;
+	vector<long long> profile_exact_points_per_query;
 };
 
 void initArray(double**& featureArray,int n,int dim);

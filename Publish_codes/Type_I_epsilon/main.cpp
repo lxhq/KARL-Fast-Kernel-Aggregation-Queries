@@ -20,7 +20,7 @@ int main(int argc,char**argv)
 	double**queryMatrix;
 	double**dataMatrix;
 
-	KDE_stat stat;
+	KDE_stat stat={};
 	stat.rel_error=rel_error;
 
 	extract_FeatureVector(querysetFileName,n_q,dim,queryMatrix,stat);

@@ -72,4 +72,62 @@ public:
 	kdLinearAugNode*createNode();
 };
 
+class kdAnchorAugNode : public kdLinearAugNode
+{
+public:
+	double*anchor;
+	double*anchor_A;
+	double anchor_W;
+	double anchor_radius;
+
+	double LB(double*q,int dim,KDE_stat& stat);
+	double UB(double*q,int dim,KDE_stat& stat);
+
+	void update_anchorAugInfo(kdAnchorAugNode*node,Tree*t);
+
+	void update_Aug(Node*node,Tree*t);
+	kdAnchorAugNode*createNode();
+};
+
+class kdAnchorOnlyAugNode : public kdAnchorAugNode
+{
+public:
+	double LB(double*q,int dim,KDE_stat& stat);
+	double UB(double*q,int dim,KDE_stat& stat);
+
+	kdAnchorOnlyAugNode*createNode();
+};
+
+class kdAdaptiveCombinedAnchorNode : public kdAnchorAugNode
+{
+public:
+	double*cache_q;
+	bool cache_use_anchor;
+	double cache_anchor_L;
+	double cache_anchor_U;
+
+	kdAdaptiveCombinedAnchorNode(): cache_q(NULL), cache_use_anchor(false), cache_anchor_L(0), cache_anchor_U(0) {}
+
+	double LB(double*q,int dim,KDE_stat& stat);
+	double UB(double*q,int dim,KDE_stat& stat);
+
+	kdAdaptiveCombinedAnchorNode*createNode();
+};
+
+class kdAdaptiveSelectAnchorNode : public kdAnchorAugNode
+{
+public:
+	double*cache_q;
+	bool cache_use_anchor;
+	double cache_anchor_L;
+	double cache_anchor_U;
+
+	kdAdaptiveSelectAnchorNode(): cache_q(NULL), cache_use_anchor(false), cache_anchor_L(0), cache_anchor_U(0) {}
+
+	double LB(double*q,int dim,KDE_stat& stat);
+	double UB(double*q,int dim,KDE_stat& stat);
+
+	kdAdaptiveSelectAnchorNode*createNode();
+};
+
 #endif
